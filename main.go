@@ -15,8 +15,8 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"
 
-	"github.com/sagikazarmark/go-gin-gorm-opencensus/internal"
-	"github.com/sagikazarmark/go-gin-gorm-opencensus/pkg/ocgorm"
+	"github.com/hashicorp/go-gin-gorm-opencensus/internal"
+	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 		ochttp.ServerResponseCountByStatusCode,
 
 		// Gorm stats
-		ocgorm.QueryCountView,
+		ocgorm.SQLClientCallsView,
 	)
 	if err != nil {
 		panic(err)
