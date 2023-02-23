@@ -164,7 +164,7 @@ func RegisterAllViews() {
 // RecordStats records database statistics for provided sql.DB at the provided
 // interval. You should defer execution of this function after you establish
 // connection to the database `if err == nil { ocgorm.RecordStats(db, 5*time.Second); }
-func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
+func RecordStats(db *gorm.DB, interval time.Duration, tags ...tag.Mutator) (fnStop func()) {
 	var (
 		closeOnce sync.Once
 		ctx       = context.Background()
@@ -185,7 +185,8 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 					}
 				}
 
-				stats.Record(ctx,
+				stats.RecordWithTags(ctx,
+					tags,
 					MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
 					MeasureIdleConnections.M(int64(dbStats.Idle)),
 					MeasureActiveConnections.M(int64(dbStats.InUse)),
