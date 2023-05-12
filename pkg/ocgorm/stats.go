@@ -179,7 +179,7 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 				dbStats := db.DB().Stats()
 
 				if dbStats.OpenConnections == 0 { // We cleanup the ticker in the event that the database is unavailable
-					if err := db.DB().Ping(); strings.Contains(err.Error(), "database is closed") {
+					if err := db.DB().Ping(); err != nil && strings.Contains(err.Error(), "database is closed") {
 						ticker.Stop()
 						return
 					}
