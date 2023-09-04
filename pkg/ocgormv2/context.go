@@ -6,7 +6,11 @@ import (
 	"gorm.io/gorm"
 )
 
+var (
+	contextScopeKey = "_opencensusContext"
+)
+
 // WithContext sets the current context in the db instance for instrumentation.
 func WithContext(ctx context.Context, db *gorm.DB) *gorm.DB {
-	return db.New().Set(contextScopeKey, ctx)
+	return db.Set(contextScopeKey, ctx)
 }
