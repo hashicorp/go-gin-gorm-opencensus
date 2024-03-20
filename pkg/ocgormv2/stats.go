@@ -1,7 +1,7 @@
 //go:build go1.11
 // +build go1.11
 
-package ocgorm
+package ocgormv2
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jinzhu/gorm"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
+	"gorm.io/gorm"
 )
 
 // Tags applied to measures
@@ -176,10 +176,14 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 		for {
 			select {
 			case <-ticker.C:
-				dbStats := db.DB().Stats()
+				sqlDB, err := db.DB()
+				if err != nil {
+					return
+				}
+				dbStats := sqlDB.Stats()
 
 				if dbStats.OpenConnections == 0 { // We cleanup the ticker in the event that the database is unavailable
-					if err := db.DB().Ping(); err != nil && strings.Contains(err.Error(), "database is closed") {
+					if err := sqlDB.Ping(); err != nil && strings.Contains(err.Error(), "database is closed") {
 						ticker.Stop()
 						return
 					}
