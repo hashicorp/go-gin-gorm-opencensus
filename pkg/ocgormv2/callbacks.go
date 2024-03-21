@@ -14,11 +14,6 @@ import (
 	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
 )
 
-// Gorm scope keys
-var (
-	spanScopeKey = "_opencensusSpan"
-)
-
 // Option allows for managing ocgorm configuration using functional options.
 type Option interface {
 	apply(c *callbacks)
@@ -140,7 +135,7 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 			trace.WithSampler(c.startOptions.Sampler),
 		)
 	} else {
-		_, span = trace.StartSpan(ctx, fmt.Sprintf("gorm:%s", operation))
+		ctx, span = trace.StartSpan(ctx, fmt.Sprintf("gorm:%s", operation))
 	}
 
 	attributes := append(
@@ -154,21 +149,11 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 
 	span.AddAttributes(attributes...)
 
-	db.Set(spanScopeKey, span)
-
 	return ctx
 }
 
 func (c *callbacks) endTrace(db *gorm.DB) {
-	rspan, ok := db.Get(spanScopeKey)
-	if !ok {
-		return
-	}
-
-	span, ok := rspan.(*trace.Span)
-	if !ok {
-		return
-	}
+	span := trace.FromContext(db.Statement.Context)
 
 	// Add query to the span if requested
 	if c.query {
