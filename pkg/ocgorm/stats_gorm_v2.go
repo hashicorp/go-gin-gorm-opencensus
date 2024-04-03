@@ -10,20 +10,8 @@ import (
 	"time"
 
 	"go.opencensus.io/stats"
-	"go.opencensus.io/stats/view"
 	gormv2 "gorm.io/gorm"
 )
-
-var (
-	DefaultViews = DefaultViews
-)
-
-// RegisterAllViews registers all ocgorm views to enable collection of stats.
-func RegisterAllViews() {
-	if err := view.Register(DefaultViews...); err != nil {
-		panic(err)
-	}
-}
 
 // RecordStatsV2 records database statistics for provided sql.DB at the provided
 // interval. You should defer execution of this function after you establish

@@ -12,66 +12,6 @@ import (
 	gormv2 "gorm.io/gorm"
 )
 
-// Option allows for managing ocgorm configuration using functional options.
-type Option interface {
-	apply(c *callbacks)
-}
-
-// OptionFunc converts a regular function to an Option if it's definition is compatible.
-type OptionFunc func(c *callbacks)
-
-func (fn OptionFunc) apply(c *callbacks) {
-	fn(c)
-}
-
-// AllowRoot allows creating root spans in the absence of existing spans.
-type AllowRoot bool
-
-func (a AllowRoot) apply(c *callbacks) {
-	c.allowRoot = bool(a)
-}
-
-// Query allows recording the sql queries in spans.
-type Query bool
-
-func (q Query) apply(c *callbacks) {
-	c.query = bool(q)
-}
-
-// StartOptions configures the initial options applied to a span.
-func StartOptions(o trace.StartOptions) Option {
-	return OptionFunc(func(c *callbacks) {
-		c.startOptions = o
-	})
-}
-
-// DefaultAttributes sets attributes to each span.
-type DefaultAttributes []trace.Attribute
-
-func (d DefaultAttributes) apply(c *callbacks) {
-	c.defaultAttributes = []trace.Attribute(d)
-}
-
-type callbacks struct {
-	// Allow ocgorm to create root spans absence of existing spans or even context.
-	// Default is to not trace ocgorm calls if no existing parent span is found
-	// in context.
-	allowRoot bool
-
-	// Allow recording of sql queries in spans.
-	// Only allow this if it is safe to have queries recorded with respect to
-	// security.
-	query bool
-
-	// startOptions are applied to the span started around each request.
-	//
-	// StartOptions.SpanKind will always be set to trace.SpanKindClient.
-	startOptions trace.StartOptions
-
-	// DefaultAttributes will be set to each span as default.
-	defaultAttributes []trace.Attribute
-}
-
 // RegisterCallbacksV2 registers the necessary callbacks in Gorm's hook system for instrumentation.
 func RegisterCallbacksV2(dbv2 *gormv2.DB, opts ...Option) error {
 	c := &callbacks{
@@ -174,10 +114,6 @@ func (c *callbacks) endTrace(db *gormv2.DB) {
 
 	span.End()
 }
-
-var (
-	queryStartPropagator, _ = tag.NewKey("sql.query_start")
-)
 
 func (c *callbacks) startStats(ctx context.Context, db *gormv2.DB, operation string) context.Context {
 	ctx, _ = tag.New(ctx,
