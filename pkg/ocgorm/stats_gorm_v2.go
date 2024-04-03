@@ -11,7 +11,7 @@ import (
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
-	"gorm.io/gorm"
+	gormv2 "gorm.io/gorm"
 )
 
 var (
@@ -25,10 +25,10 @@ func RegisterAllViews() {
 	}
 }
 
-// RecordStats records database statistics for provided sql.DB at the provided
+// RecordStatsV2 records database statistics for provided sql.DB at the provided
 // interval. You should defer execution of this function after you establish
 // connection to the database `if err == nil { ocgorm.RecordStats(db, 5*time.Second); }
-func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
+func RecordStatsV2(dbv2 *gormv2.DB, interval time.Duration) (fnStop func()) {
 	var (
 		closeOnce sync.Once
 		ctx       = context.Background()
@@ -40,7 +40,7 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 		for {
 			select {
 			case <-ticker.C:
-				sqlDB, err := db.DB()
+				sqlDB, err := dbv2.DB()
 				if err != nil {
 					return
 				}
