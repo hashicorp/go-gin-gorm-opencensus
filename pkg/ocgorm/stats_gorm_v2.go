@@ -1,7 +1,7 @@
 //go:build go1.11
 // +build go1.11
 
-package ocgormv2
+package ocgorm
 
 import (
 	"context"
@@ -12,12 +12,10 @@ import (
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"gorm.io/gorm"
-
-	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
 )
 
 var (
-	DefaultViews = ocgorm.DefaultViews
+	DefaultViews = DefaultViews
 )
 
 // RegisterAllViews registers all ocgorm views to enable collection of stats.
@@ -56,13 +54,13 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 				}
 
 				stats.Record(ctx,
-					ocgorm.MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
-					ocgorm.MeasureIdleConnections.M(int64(dbStats.Idle)),
-					ocgorm.MeasureActiveConnections.M(int64(dbStats.InUse)),
-					ocgorm.MeasureWaitCount.M(dbStats.WaitCount),
-					ocgorm.MeasureWaitDuration.M(float64(dbStats.WaitDuration.Nanoseconds())/1e6),
-					ocgorm.MeasureIdleClosed.M(dbStats.MaxIdleClosed),
-					ocgorm.MeasureLifetimeClosed.M(dbStats.MaxLifetimeClosed),
+					MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
+					MeasureIdleConnections.M(int64(dbStats.Idle)),
+					MeasureActiveConnections.M(int64(dbStats.InUse)),
+					MeasureWaitCount.M(dbStats.WaitCount),
+					MeasureWaitDuration.M(float64(dbStats.WaitDuration.Nanoseconds())/1e6),
+					MeasureIdleClosed.M(dbStats.MaxIdleClosed),
+					MeasureLifetimeClosed.M(dbStats.MaxLifetimeClosed),
 				)
 			case <-done:
 				ticker.Stop()

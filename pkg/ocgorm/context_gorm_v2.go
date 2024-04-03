@@ -1,4 +1,4 @@
-package ocgormv2
+package ocgorm
 
 import (
 	"context"

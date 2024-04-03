@@ -1,4 +1,4 @@
-package ocgormv2
+package ocgorm
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
 	"gorm.io/gorm"
-
-	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
 )
 
 // Option allows for managing ocgorm configuration using functional options.
@@ -140,11 +138,11 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 
 	attributes := append(
 		c.defaultAttributes,
-		trace.StringAttribute(ocgorm.TableAttribute, db.Statement.Table),
+		trace.StringAttribute(TableAttribute, db.Statement.Table),
 	)
 
 	if c.query {
-		attributes = append(attributes, trace.StringAttribute(ocgorm.ResourceNameAttribute, db.Statement.SQL.String()))
+		attributes = append(attributes, trace.StringAttribute(ResourceNameAttribute, db.Statement.SQL.String()))
 	}
 
 	span.AddAttributes(attributes...)
@@ -157,7 +155,7 @@ func (c *callbacks) endTrace(db *gorm.DB) {
 
 	// Add query to the span if requested
 	if c.query {
-		span.AddAttributes(trace.StringAttribute(ocgorm.ResourceNameAttribute, db.Statement.SQL.String()))
+		span.AddAttributes(trace.StringAttribute(ResourceNameAttribute, db.Statement.SQL.String()))
 	}
 
 	var status trace.Status
@@ -183,8 +181,8 @@ var (
 
 func (c *callbacks) startStats(ctx context.Context, db *gorm.DB, operation string) context.Context {
 	ctx, _ = tag.New(ctx,
-		tag.Upsert(ocgorm.Operation, operation),
-		tag.Upsert(ocgorm.Table, db.Statement.Table),
+		tag.Upsert(Operation, operation),
+		tag.Upsert(Table, db.Statement.Table),
 		tag.Upsert(queryStartPropagator, time.Now().UTC().Format(time.RFC3339Nano)),
 	)
 
@@ -213,10 +211,10 @@ func (c *callbacks) endStats(db *gorm.DB) {
 
 		timeSpentMs := float64(time.Since(queryStart).Nanoseconds()) / 1e6
 
-		stats.Record(ctx, ocgorm.MeasureLatencyMs.M(timeSpentMs))
+		stats.Record(ctx, MeasureLatencyMs.M(timeSpentMs))
 	}
 
-	stats.Record(ctx, ocgorm.MeasureQueryCount.M(1))
+	stats.Record(ctx, MeasureQueryCount.M(1))
 }
 
 func (c *callbacks) beforeCreate(db *gorm.DB)   { c.before(db, "create") }
