@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	gormv1 "github.com/jinzhu/gorm"
 	"go.opencensus.io/stats"
 	gormv2 "gorm.io/gorm"
 )
@@ -16,7 +17,11 @@ import (
 // RecordStatsV2 records database statistics for provided sql.DB at the provided
 // interval. You should defer execution of this function after you establish
 // connection to the database `if err == nil { ocgorm.RecordStats(db, 5*time.Second); }
-func RecordStatsV2(dbv2 *gormv2.DB, interval time.Duration) (fnStop func()) {
+func RecordStatsV2(dbv1 *gormv1.DB, dbv2 *gormv2.DB, interval time.Duration) (fnStop func()) {
+	if dbv1 != nil {
+		return RecordStats(dbv1, interval)
+	}
+
 	var (
 		closeOnce sync.Once
 		ctx       = context.Background()

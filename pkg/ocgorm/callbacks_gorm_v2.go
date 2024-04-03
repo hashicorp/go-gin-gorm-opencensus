@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	gormv1 "github.com/jinzhu/gorm"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
@@ -13,7 +14,12 @@ import (
 )
 
 // RegisterCallbacksV2 registers the necessary callbacks in Gorm's hook system for instrumentation.
-func RegisterCallbacksV2(dbv2 *gormv2.DB, opts ...Option) error {
+func RegisterCallbacksV2(dbv1 *gormv1.DB, dbv2 *gormv2.DB, opts ...Option) error {
+	if dbv1 != nil {
+		RegisterCallbacks(dbv1, opts...)
+		return nil
+	}
+
 	c := &callbacks{
 		defaultAttributes: []trace.Attribute{},
 	}
@@ -23,36 +29,36 @@ func RegisterCallbacksV2(dbv2 *gormv2.DB, opts ...Option) error {
 	}
 
 	return errors.Join(
-		dbv2.Callback().Create().Before("gorm:create").Register("instrumentation:before_create", c.beforeCreate),
-		dbv2.Callback().Create().After("gorm:create").Register("instrumentation:after_create", c.afterCreate),
-		dbv2.Callback().Query().Before("gorm:query").Register("instrumentation:before_query", c.beforeQuery),
-		dbv2.Callback().Query().After("gorm:query").Register("instrumentation:after_query", c.afterQuery),
-		dbv2.Callback().Query().Before("gorm:row_query").Register("instrumentation:before_row_query", c.beforeRowQuery),
-		dbv2.Callback().Query().After("gorm:row_query").Register("instrumentation:after_row_query", c.afterRowQuery),
-		dbv2.Callback().Update().Before("gorm:update").Register("instrumentation:before_update", c.beforeUpdate),
-		dbv2.Callback().Update().After("gorm:update").Register("instrumentation:after_update", c.afterUpdate),
-		dbv2.Callback().Delete().Before("gorm:delete").Register("instrumentation:before_delete", c.beforeDelete),
-		dbv2.Callback().Delete().After("gorm:delete").Register("instrumentation:after_delete", c.afterDelete))
+		dbv2.Callback().Create().Before("gorm:create").Register("instrumentation:before_create", c.beforeCreateV2),
+		dbv2.Callback().Create().After("gorm:create").Register("instrumentation:after_create", c.afterCreateV2),
+		dbv2.Callback().Query().Before("gorm:query").Register("instrumentation:before_query", c.beforeQueryV2),
+		dbv2.Callback().Query().After("gorm:query").Register("instrumentation:after_query", c.afterQueryV2),
+		dbv2.Callback().Query().Before("gorm:row_query").Register("instrumentation:before_row_query", c.beforeRowQueryV2),
+		dbv2.Callback().Query().After("gorm:row_query").Register("instrumentation:after_row_query", c.afterRowQueryV2),
+		dbv2.Callback().Update().Before("gorm:update").Register("instrumentation:before_update", c.beforeUpdateV2),
+		dbv2.Callback().Update().After("gorm:update").Register("instrumentation:after_update", c.afterUpdateV2),
+		dbv2.Callback().Delete().Before("gorm:delete").Register("instrumentation:before_delete", c.beforeDeleteV2),
+		dbv2.Callback().Delete().After("gorm:delete").Register("instrumentation:after_delete", c.afterDeleteV2))
 }
 
-func (c *callbacks) before(db *gormv2.DB, operation string) {
+func (c *callbacks) beforeV2(db *gormv2.DB, operation string) {
 	ctx := db.Statement.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	ctx = c.startTrace(ctx, db, operation)
-	ctx = c.startStats(ctx, db, operation)
+	ctx = c.startTraceV2(ctx, db, operation)
+	ctx = c.startStatsV2(ctx, db, operation)
 
 	db.Statement.Context = ctx
 }
 
-func (c *callbacks) after(db *gormv2.DB) {
-	c.endTrace(db)
-	c.endStats(db)
+func (c *callbacks) afterV2(db *gormv2.DB) {
+	c.endTraceV2(db)
+	c.endStatsV2(db)
 }
 
-func (c *callbacks) startTrace(ctx context.Context, db *gormv2.DB, operation string) context.Context {
+func (c *callbacks) startTraceV2(ctx context.Context, db *gormv2.DB, operation string) context.Context {
 	// Context is missing, but we allow root spans to be created
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,7 +96,7 @@ func (c *callbacks) startTrace(ctx context.Context, db *gormv2.DB, operation str
 	return ctx
 }
 
-func (c *callbacks) endTrace(db *gormv2.DB) {
+func (c *callbacks) endTraceV2(db *gormv2.DB) {
 	span := trace.FromContext(db.Statement.Context)
 
 	// Add query to the span if requested
@@ -115,7 +121,7 @@ func (c *callbacks) endTrace(db *gormv2.DB) {
 	span.End()
 }
 
-func (c *callbacks) startStats(ctx context.Context, db *gormv2.DB, operation string) context.Context {
+func (c *callbacks) startStatsV2(ctx context.Context, db *gormv2.DB, operation string) context.Context {
 	ctx, _ = tag.New(ctx,
 		tag.Upsert(Operation, operation),
 		tag.Upsert(Table, db.Statement.Table),
@@ -125,7 +131,7 @@ func (c *callbacks) startStats(ctx context.Context, db *gormv2.DB, operation str
 	return ctx
 }
 
-func (c *callbacks) endStats(db *gormv2.DB) {
+func (c *callbacks) endStatsV2(db *gormv2.DB) {
 	if db.Error != nil {
 		return
 	}
@@ -153,13 +159,13 @@ func (c *callbacks) endStats(db *gormv2.DB) {
 	stats.Record(ctx, MeasureQueryCount.M(1))
 }
 
-func (c *callbacks) beforeCreate(db *gormv2.DB)   { c.before(db, "create") }
-func (c *callbacks) afterCreate(db *gormv2.DB)    { c.after(db) }
-func (c *callbacks) beforeQuery(db *gormv2.DB)    { c.before(db, "query") }
-func (c *callbacks) afterQuery(db *gormv2.DB)     { c.after(db) }
-func (c *callbacks) beforeRowQuery(db *gormv2.DB) { c.before(db, "row_query") }
-func (c *callbacks) afterRowQuery(db *gormv2.DB)  { c.after(db) }
-func (c *callbacks) beforeUpdate(db *gormv2.DB)   { c.before(db, "update") }
-func (c *callbacks) afterUpdate(db *gormv2.DB)    { c.after(db) }
-func (c *callbacks) beforeDelete(db *gormv2.DB)   { c.before(db, "delete") }
-func (c *callbacks) afterDelete(db *gormv2.DB)    { c.after(db) }
+func (c *callbacks) beforeCreateV2(db *gormv2.DB)   { c.beforeV2(db, "create") }
+func (c *callbacks) afterCreateV2(db *gormv2.DB)    { c.afterV2(db) }
+func (c *callbacks) beforeQueryV2(db *gormv2.DB)    { c.beforeV2(db, "query") }
+func (c *callbacks) afterQueryV2(db *gormv2.DB)     { c.afterV2(db) }
+func (c *callbacks) beforeRowQueryV2(db *gormv2.DB) { c.beforeV2(db, "row_query") }
+func (c *callbacks) afterRowQueryV2(db *gormv2.DB)  { c.afterV2(db) }
+func (c *callbacks) beforeUpdateV2(db *gormv2.DB)   { c.beforeV2(db, "update") }
+func (c *callbacks) afterUpdateV2(db *gormv2.DB)    { c.afterV2(db) }
+func (c *callbacks) beforeDeleteV2(db *gormv2.DB)   { c.beforeV2(db, "delete") }
+func (c *callbacks) afterDeleteV2(db *gormv2.DB)    { c.afterV2(db) }
