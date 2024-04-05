@@ -118,7 +118,7 @@ var (
 		Name:        "go.sql/db/connections/wait_count",
 		Description: "The total number of connections waited for",
 		Measure:     MeasureWaitCount,
-		Aggregation: view.LastValue(),
+		Aggregation: view.Count(),
 		TagKeys:     []tag.Key{},
 	}
 
@@ -126,7 +126,7 @@ var (
 		Name:        "go.sql/db/connections/wait_duration",
 		Description: "The total time blocked waiting for a new connection",
 		Measure:     MeasureWaitDuration,
-		Aggregation: view.LastValue(),
+		Aggregation: view.Count(),
 		TagKeys:     []tag.Key{},
 	}
 
@@ -134,7 +134,7 @@ var (
 		Name:        "go.sql/db/connections/idle_closed_count",
 		Description: "The total number of connections closed due to SetMaxIdleConns",
 		Measure:     MeasureIdleClosed,
-		Aggregation: view.LastValue(),
+		Aggregation: view.Count(),
 		TagKeys:     []tag.Key{},
 	}
 
@@ -142,7 +142,7 @@ var (
 		Name:        "go.sql/db/connections/lifetime_closed_count",
 		Description: "The total number of connections closed due to SetConnMaxLifetime",
 		Measure:     MeasureLifetimeClosed,
-		Aggregation: view.LastValue(),
+		Aggregation: view.Count(),
 		TagKeys:     []tag.Key{},
 	}
 
