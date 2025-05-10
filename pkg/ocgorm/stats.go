@@ -22,6 +22,9 @@ var (
 
 	// Table name of the target database table
 	Table, _ = tag.NewKey("sql.table")
+
+	// DatabaseName is the name of the target database
+	DatabaseName, _ = tag.NewKey("database_name")
 )
 
 // Measures
@@ -95,7 +98,7 @@ var (
 		Description: "The number of open connections",
 		Measure:     MeasureOpenConnections,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientIdleConnectionsView = &view.View{
@@ -103,7 +106,7 @@ var (
 		Description: "The number of idle connections",
 		Measure:     MeasureIdleConnections,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientActiveConnectionsView = &view.View{
@@ -111,7 +114,7 @@ var (
 		Description: "The number of active connections",
 		Measure:     MeasureActiveConnections,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientWaitCountView = &view.View{
@@ -119,7 +122,7 @@ var (
 		Description: "The total number of connections waited for",
 		Measure:     MeasureWaitCount,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientWaitDurationView = &view.View{
@@ -127,7 +130,7 @@ var (
 		Description: "The total time blocked waiting for a new connection",
 		Measure:     MeasureWaitDuration,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientIdleClosedView = &view.View{
@@ -135,7 +138,7 @@ var (
 		Description: "The total number of connections closed due to SetMaxIdleConns",
 		Measure:     MeasureIdleClosed,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	SQLClientLifetimeClosedView = &view.View{
@@ -143,7 +146,7 @@ var (
 		Description: "The total number of connections closed due to SetConnMaxLifetime",
 		Measure:     MeasureLifetimeClosed,
 		Aggregation: view.LastValue(),
-		TagKeys:     []tag.Key{},
+		TagKeys:     []tag.Key{DatabaseName},
 	}
 
 	DefaultViews = []*view.View{
@@ -164,7 +167,7 @@ func RegisterAllViews() {
 // RecordStats records database statistics for provided sql.DB at the provided
 // interval. You should defer execution of this function after you establish
 // connection to the database `if err == nil { ocgorm.RecordStats(db, 5*time.Second); }
-func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
+func RecordStats(db *gorm.DB, interval time.Duration, name string) (fnStop func()) {
 	var (
 		closeOnce sync.Once
 		ctx       = context.Background()
@@ -185,7 +188,8 @@ func RecordStats(db *gorm.DB, interval time.Duration) (fnStop func()) {
 					}
 				}
 
-				stats.Record(ctx,
+				stats.RecordWithTags(ctx,
+					[]tag.Mutator{tag.Upsert(DatabaseName, name)},
 					MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
 					MeasureIdleConnections.M(int64(dbStats.Idle)),
 					MeasureActiveConnections.M(int64(dbStats.InUse)),
