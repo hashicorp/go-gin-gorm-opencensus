@@ -10,6 +10,8 @@ BUILD_PACKAGE = ${PACKAGE}
 
 # Dependency versions
 GOLANGCI_VERSION = 1.16.0
+CURRENT_YEAR := $(shell date +%Y)
+CURRENT_TIME := $(shell date +%Y%m%d_%H%M%S)
 
 .PHONY: up
 up: start .env .env.test ## Set up the development environment
@@ -78,3 +80,18 @@ help:
 # Variable outputting/exporting rules
 var-%: ; @echo $($*)
 varexport-%: ; @echo $*=$($*)
+
+.PHONY: install-copywrite-ibm
+install-copywrite-ibm: ## Install copywrite-ibm tool
+	git clone https://github.com/hashicorp/copywrite_ibm.git /tmp/$(CURRENT_TIME)/copywrite_ibm
+	make -C /tmp/$(CURRENT_TIME)/copywrite_ibm install
+	cp /tmp/$(CURRENT_TIME)/copywrite_ibm/copywrite-ibm .
+
+
+.PHONY: add-license-headers
+add-license-headers: ## Add license headers to all source files
+	./copywrite-ibm --config .copywrite.hcl headers --year1 2020 --year2 $(CURRENT_YEAR)
+
+.PHONY: verify-license-headers
+verify-license-headers: ## Verify license headers on all source files
+	./copywrite-ibm --config .copywrite.hcl headers --year1 2020 --year2 $(CURRENT_YEAR) --plan
