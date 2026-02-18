@@ -1,6 +1,3 @@
-// Copyright IBM Corp. 2018, 2025
-// SPDX-License-Identifier: MIT
-
 package ocgormv2
 
 import (
