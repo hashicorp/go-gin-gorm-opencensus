@@ -1,6 +1,3 @@
-// Copyright IBM Corp. 2018, 2025
-// SPDX-License-Identifier: MIT
-
 //go:build go1.11
 // +build go1.11
 
