@@ -103,18 +103,22 @@ func (c *callbacks) before(db *gorm.DB, operation string) {
 		ctx = context.Background()
 	}
 
-	ctx = c.startTrace(ctx, db, operation)
+	ctx, span := c.startTrace(ctx, db, operation) // now returns (ctx, span)
 	ctx = c.startStats(ctx, db, operation)
-
+	if span != nil {
+		ctx = context.WithValue(ctx, operationSpanKey(operation), span)
+	}
 	db.Statement.Context = ctx
 }
 
-func (c *callbacks) after(db *gorm.DB) {
-	c.endTrace(db)
+func (c *callbacks) after(db *gorm.DB, operation string) {
+	if span, ok := db.Statement.Context.Value(operationSpanKey(operation)).(*trace.Span); ok && span != nil {
+		c.endTrace(db, span) // ends exactly the span this operation started
+	}
 	c.endStats(db)
 }
 
-func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation string) context.Context {
+func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation string) (context.Context, *trace.Span) {
 	// Context is missing, but we allow root spans to be created
 	if ctx == nil {
 		ctx = context.Background()
@@ -122,7 +126,7 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 
 	parentSpan := trace.FromContext(ctx)
 	if parentSpan == nil && !c.allowRoot {
-		return ctx
+		return ctx, nil
 	}
 
 	var span *trace.Span
@@ -149,11 +153,10 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 
 	span.AddAttributes(attributes...)
 
-	return ctx
+	return ctx, span
 }
 
-func (c *callbacks) endTrace(db *gorm.DB) {
-	span := trace.FromContext(db.Statement.Context)
+func (c *callbacks) endTrace(db *gorm.DB, span *trace.Span) {
 
 	// Add query to the span if requested
 	if c.query {
@@ -220,12 +223,21 @@ func (c *callbacks) endStats(db *gorm.DB) {
 }
 
 func (c *callbacks) beforeCreate(db *gorm.DB)   { c.before(db, "create") }
-func (c *callbacks) afterCreate(db *gorm.DB)    { c.after(db) }
+func (c *callbacks) afterCreate(db *gorm.DB)    { c.after(db, "create") }
 func (c *callbacks) beforeQuery(db *gorm.DB)    { c.before(db, "query") }
-func (c *callbacks) afterQuery(db *gorm.DB)     { c.after(db) }
+func (c *callbacks) afterQuery(db *gorm.DB)     { c.after(db, "query") }
 func (c *callbacks) beforeRowQuery(db *gorm.DB) { c.before(db, "row_query") }
-func (c *callbacks) afterRowQuery(db *gorm.DB)  { c.after(db) }
+func (c *callbacks) afterRowQuery(db *gorm.DB)  { c.after(db, "row_query") }
 func (c *callbacks) beforeUpdate(db *gorm.DB)   { c.before(db, "update") }
-func (c *callbacks) afterUpdate(db *gorm.DB)    { c.after(db) }
+func (c *callbacks) afterUpdate(db *gorm.DB)    { c.after(db, "update") }
 func (c *callbacks) beforeDelete(db *gorm.DB)   { c.before(db, "delete") }
-func (c *callbacks) afterDelete(db *gorm.DB)    { c.after(db) }
+func (c *callbacks) afterDelete(db *gorm.DB)    { c.after(db, "delete") }
+
+// spanKey is a private context key used to store a per-operation span so that
+// nested GORM callbacks (e.g. "row_query" running inside the "query" callback
+// chain) cannot overwrite each other's span reference in db.Statement.Context.
+type spanKey string
+
+func operationSpanKey(operation string) spanKey {
+	return spanKey("ocgormv2:span:" + operation)
+}
