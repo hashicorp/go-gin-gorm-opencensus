@@ -159,9 +159,18 @@ func (c *callbacks) startTrace(ctx context.Context, scope *gorm.Scope, operation
 		attributes = append(attributes, trace.StringAttribute(DBOperationAttribute, verb))
 	}
 
-	// The statement is deliberately NOT recorded here. gorm builds scope.SQL in
-	// its own "gorm:<operation>" callback, which runs after this one, so it is
-	// still empty at this point. endTrace records it.
+	// db.statement tracks resource.name exactly, in both hooks, so the two never
+	// disagree about what the statement was. See the equivalent comment in
+	// pkg/ocgormv2/callbacks.go for why recording in both hooks is needed: for
+	// most operations scope.SQL is not built until after this hook, but when the
+	// caller supplied the SQL itself it is already present here.
+	if c.query {
+		attributes = append(attributes,
+			trace.StringAttribute(ResourceNameAttribute, scope.SQL),
+			trace.StringAttribute(DBStatementAttribute, scope.SQL),
+		)
+	}
+
 	span.AddAttributes(attributes...)
 
 	scope.Set(spanScopeKey, span)

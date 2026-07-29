@@ -116,6 +116,49 @@ func TestQuerySpanCarriesOtelDatabaseAttributes(t *testing.T) {
 	}
 }
 
+// TestCallerSuppliedStatementIsRecorded covers the case where the caller built
+// the SQL itself, as db.Raw(...).Find(...) does.
+//
+//	Given a query whose SQL is already set before the callbacks run,
+//	When  it completes,
+//	Then  the statement is recorded.
+//
+// This is why the statement is recorded in startTrace as well as endTrace. gorm
+// normally builds Statement.SQL in its own "gorm:<operation>" callback, after the
+// before-hook, but Raw populates it up front -- so the two hooks cover different
+// shapes of query and both are needed.
+func TestCallerSuppliedStatementIsRecorded(t *testing.T) {
+	const sql = "SELECT * FROM users WHERE id = $1"
+
+	rec := &recorder{}
+	trace.RegisterExporter(rec)
+	t.Cleanup(func() { trace.UnregisterExporter(rec) })
+
+	ctx, parent := trace.StartSpan(context.Background(), "parent",
+		trace.WithSampler(trace.AlwaysSample()))
+
+	// Given: SQL present before the before-hook, the way Raw leaves it.
+	db := &gorm.DB{Statement: &gorm.Statement{Table: "users", Context: ctx}}
+	db.Statement.SQL.WriteString(sql)
+
+	c := &callbacks{query: true}
+	c.before(db, "query")
+	c.after(db)
+	parent.End()
+
+	for _, s := range rec.spans {
+		if s.Name == "parent" {
+			continue
+		}
+		if got := s.Attributes[ocgorm.DBStatementAttribute]; got != sql {
+			t.Errorf("%s = %v, want %v", ocgorm.DBStatementAttribute, got, sql)
+		}
+		if got := s.Attributes[ocgorm.ResourceNameAttribute]; got != sql {
+			t.Errorf("%s = %v, want %v", ocgorm.ResourceNameAttribute, got, sql)
+		}
+	}
+}
+
 // TestStatementOmittedWhenQueryDisabled checks the Query(false) contract still
 // holds for the new attribute: callers who opt out of statement recording must
 // not have the SQL emitted under a different key.

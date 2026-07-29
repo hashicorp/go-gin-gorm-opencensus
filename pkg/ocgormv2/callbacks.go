@@ -162,9 +162,23 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 		attributes = append(attributes, trace.StringAttribute(ocgorm.DBOperationAttribute, verb))
 	}
 
-	// The statement is deliberately NOT recorded here. gorm builds
-	// Statement.SQL inside the "gorm:<operation>" callback itself, which runs
-	// after this one, so it is still empty at this point. endTrace records it.
+	// db.statement tracks resource.name exactly, in both hooks, so the two never
+	// disagree about what the statement was.
+	//
+	// Whether the statement exists yet depends on how the caller built the query.
+	// gorm normally populates Statement.SQL inside the "gorm:<operation>" callback,
+	// which runs after this hook, so for Find/Create/Update/Delete it is still
+	// empty here and only the endTrace copy carries a value. When the caller
+	// supplied the SQL itself -- db.Raw(...).Find(...) -- it is already populated.
+	// Recording in both hooks covers both shapes.
+	if c.query {
+		statement := db.Statement.SQL.String()
+		attributes = append(attributes,
+			trace.StringAttribute(ocgorm.ResourceNameAttribute, statement),
+			trace.StringAttribute(ocgorm.DBStatementAttribute, statement),
+		)
+	}
+
 	span.AddAttributes(attributes...)
 
 	return ctx
@@ -174,8 +188,8 @@ func (c *callbacks) endTrace(db *gorm.DB) {
 	span := trace.FromContext(db.Statement.Context)
 
 	// Add query to the span if requested. This runs after the gorm callback that
-	// builds Statement.SQL, so unlike in startTrace the statement is populated
-	// here.
+	// builds Statement.SQL, so the statement is populated here for every operation
+	// -- which is why the startTrace copy alone is not sufficient.
 	//
 	// gorm keeps bound values in Statement.Vars and leaves placeholders in
 	// Statement.SQL, so this records parameterised SQL rather than literals.
