@@ -130,6 +130,10 @@ func (c *callbacks) startTrace(ctx context.Context, scope *gorm.Scope, operation
 
 	var span *trace.Span
 
+	// SpanKindClient must be set on BOTH branches -- see the equivalent comment
+	// in pkg/ocgormv2/callbacks.go. Without it the span reaches an
+	// OpenTelemetry backend as INTERNAL and the db.* attributes below are never
+	// examined, so the query is not recognised as a database call.
 	if parentSpan == nil {
 		ctx, span = trace.StartSpan(
 			context.Background(),
@@ -138,18 +142,26 @@ func (c *callbacks) startTrace(ctx context.Context, scope *gorm.Scope, operation
 			trace.WithSampler(c.startOptions.Sampler),
 		)
 	} else {
-		_, span = trace.StartSpan(ctx, fmt.Sprintf("gorm:%s", operation))
+		_, span = trace.StartSpan(
+			ctx,
+			fmt.Sprintf("gorm:%s", operation),
+			trace.WithSpanKind(trace.SpanKindClient),
+		)
 	}
 
 	attributes := append(
 		c.defaultAttributes,
 		trace.StringAttribute(TableAttribute, scope.TableName()),
+		trace.StringAttribute(DBSQLTableAttribute, scope.TableName()),
 	)
 
-	if c.query {
-		attributes = append(attributes, trace.StringAttribute(ResourceNameAttribute, scope.SQL))
+	if verb := SQLVerbForOperation(operation); verb != "" {
+		attributes = append(attributes, trace.StringAttribute(DBOperationAttribute, verb))
 	}
 
+	// The statement is deliberately NOT recorded here. gorm builds scope.SQL in
+	// its own "gorm:<operation>" callback, which runs after this one, so it is
+	// still empty at this point. endTrace records it.
 	span.AddAttributes(attributes...)
 
 	scope.Set(spanScopeKey, span)
@@ -168,9 +180,15 @@ func (c *callbacks) endTrace(scope *gorm.Scope) {
 		return
 	}
 
-	// Add query to the span if requested
+	// Add query to the span if requested. This runs after the gorm callback that
+	// builds scope.SQL, so unlike in startTrace the statement is populated here.
+	// gorm keeps bound values in SQLVars, so this is parameterised SQL rather
+	// than literals -- keep it that way, since backends do not reliably scrub it.
 	if c.query {
-		span.AddAttributes(trace.StringAttribute(ResourceNameAttribute, scope.SQL))
+		span.AddAttributes(
+			trace.StringAttribute(ResourceNameAttribute, scope.SQL),
+			trace.StringAttribute(DBStatementAttribute, scope.SQL),
+		)
 	}
 
 	var status trace.Status
