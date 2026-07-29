@@ -115,18 +115,17 @@ func (s *scenario) whenTheQueryRuns(operation, sqlBuiltByGorm string) *scenario 
 	return s
 }
 
-// thenTheDatabaseSpan returns the single span the query should have produced,
-// failing the test if none arrived.
+// thenTheDatabaseSpan returns the one span the query should have produced.
 //
-// Selected by presence rather than by count: ocgormv2 registers its row-query
-// callbacks against an anchor that does not exist on gorm v2's Query processor,
-// so a real query currently records more than one span. That is a separate
-// pre-existing defect, and asserting a count here would fail because of it.
+// One, exactly: a query is a single operation and should be reported as a single
+// call. This used to be unassertable, because the row-query hooks were registered
+// on the Query processor and ran a second time for every query -- see
+// registration_test.go.
 func (s *scenario) thenTheDatabaseSpan() *trace.SpanData {
 	s.t.Helper()
 
 	spans := s.rec.gormSpans()
-	require.NotEmpty(s.t, spans, "the instrumentation produced no span for the query")
+	require.Len(s.t, spans, 1, "a query should be reported as exactly one span")
 
 	return spans[0]
 }
