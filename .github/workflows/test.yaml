@@ -1,0 +1,54 @@
+---
+name: test
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - 'main'
+      - 'master'
+  pull_request:
+    types:
+      - reopened
+
+env:
+  GOPRIVATE: github.com/hashicorp/*
+  TERM: xterm
+
+permissions:
+  contents: read
+
+jobs:
+  # The org standard is to delegate to the shared reusable workflows
+  # (hashicorp/cloud-github-actions/.github/workflows/{go-test,hcp-checks}.yaml@v1),
+  # the way cloud-resource-manager does, and this job would be a few lines if it
+  # could. It cannot yet: both of those drive the build through cloud-makefiles
+  # targets -- `make makefiles/init`, `make go/test-ci`, `make go/lint` -- and this
+  # repository has no .modules/cloud-makefiles submodule; its Makefile predates that
+  # convention. Adopting cloud-makefiles here is worthwhile but is a build-tooling
+  # change rather than part of a tracing fix, so it is left as a follow-up. Until
+  # then this mirrors the shared workflows' trigger, env and permissions
+  # configuration and runs the equivalent checks directly.
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./pkg)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test -count=1 -race ./...
