@@ -1,196 +1,246 @@
 package ocgormv2
 
+// These tests tell the story of a gorm v2 query as an observability backend sees
+// it, and they exist because of a specific outage: after services moved their
+// trace export from Datadog to Instana over the OpenCensus->OpenTelemetry bridge,
+// database queries silently stopped being recognised as database calls.
+//
+// The story has three beats, and each has a test below:
+//
+//  1. A query is an OUTBOUND call, so its span must say so. A span with no kind
+//     arrives as INTERNAL, and Instana classifies internal spans as ordinary work
+//     without ever inspecting their db.* attributes -- so the kind is what makes
+//     everything else matter.
+//  2. The span must DESCRIBE THE DATABASE, using the attribute names the backend
+//     actually reads, while keeping the Datadog ones that are still in use.
+//  3. Recording the statement must honour the caller's Query(bool) choice, and
+//     must work whether gorm built the SQL or the caller supplied it.
+
 import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opencensus.io/trace"
 	"gorm.io/gorm"
 
 	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
 )
 
-// recorder collects finished spans so a test can inspect them the way an
-// exporter would.
+// recorder collects finished spans, standing in for the exporter that would ship
+// them to a tracing backend.
 type recorder struct {
 	spans []*trace.SpanData
 }
 
 func (r *recorder) ExportSpan(s *trace.SpanData) { r.spans = append(r.spans, s) }
 
-// record runs one instrumented gorm operation against a hand-built statement and
-// returns the spans that were exported.
+// gormSpans returns the spans the instrumentation produced, excluding the
+// surrounding request span.
+func (r *recorder) gormSpans() []*trace.SpanData {
+	var out []*trace.SpanData
+	for _, s := range r.spans {
+		if s.Name != "parent" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// scenario builds the world a gorm query runs in: a recording exporter, a parent
+// span in context, and an instrumented statement.
+type scenario struct {
+	t   *testing.T
+	rec *recorder
+	db  *gorm.DB
+	c   *callbacks
+}
+
+// givenAnInstrumentedQuery sets up a query against the "users" table inside a
+// request span.
 //
-// The gorm.DB is constructed directly rather than opened over a driver: these
-// callbacks only read Statement.Table/SQL/Context, so a real connection would add
-// a dialector dependency without covering anything extra.
-func record(t *testing.T, c *callbacks, operation, sql string) []*trace.SpanData {
+// The gorm.DB is built directly rather than opened over a driver: these callbacks
+// only read Statement.Table, Statement.SQL and Statement.Context, so a real
+// connection would add a dialector dependency without covering anything more.
+//
+// A parent span in context is not incidental -- it selects the branch of
+// startTrace that production always takes, and that branch is where the span kind
+// was missing.
+func givenAnInstrumentedQuery(t *testing.T, opts ...Option) *scenario {
 	t.Helper()
 
 	rec := &recorder{}
 	trace.RegisterExporter(rec)
 	t.Cleanup(func() { trace.UnregisterExporter(rec) })
 
-	// A parent span in context is what production has, and it selects the
-	// branch of startTrace that the bug was in.
 	ctx, parent := trace.StartSpan(context.Background(), "parent",
 		trace.WithSampler(trace.AlwaysSample()))
+	t.Cleanup(parent.End)
 
-	db := &gorm.DB{Statement: &gorm.Statement{Table: "users", Context: ctx}}
-
-	c.before(db, operation)
-	// gorm builds Statement.SQL in its own "gorm:<operation>" callback, which
-	// runs between the before and after hooks. Standing in for that here is what
-	// makes the empty-statement-in-startTrace trap visible.
-	db.Statement.SQL.WriteString(sql)
-	c.after(db)
-
-	parent.End()
-
-	var gormSpans []*trace.SpanData
-	for _, s := range rec.spans {
-		if s.Name != "parent" {
-			gormSpans = append(gormSpans, s)
-		}
+	c := &callbacks{defaultAttributes: []trace.Attribute{}}
+	for _, o := range opts {
+		o.apply(c)
 	}
-	return gormSpans
-}
 
-func attrs(s *trace.SpanData) map[string]interface{} { return s.Attributes }
-
-// TestQuerySpanIsClientKindForInstana is the regression test for the defect that
-// hid every gorm query from Instana's database views:
-//
-//	Given a parent span in context, as every instrumented request has,
-//	When  an instrumented gorm query runs,
-//	Then  the span it produces is SpanKindClient.
-//
-// A database query is an outbound call. Before this was fixed the kind was only
-// set on the no-parent branch, so real traffic produced kind-unspecified spans;
-// those reach an OpenTelemetry backend as INTERNAL, and Instana then treats the
-// span as internal work and never inspects its db.* attributes.
-func TestQuerySpanIsClientKindForInstana(t *testing.T) {
-	spans := record(t, &callbacks{query: true}, "query", "SELECT * FROM users WHERE id = $1")
-
-	if len(spans) == 0 {
-		t.Fatal("no span was exported for the gorm operation")
-	}
-	for _, s := range spans {
-		if s.SpanKind != trace.SpanKindClient {
-			t.Errorf("span %q has kind %d, want SpanKindClient (%d) -- Instana will not classify it as a database call",
-				s.Name, s.SpanKind, trace.SpanKindClient)
-		}
+	return &scenario{
+		t:   t,
+		rec: rec,
+		db:  &gorm.DB{Statement: &gorm.Statement{Table: "users", Context: ctx}},
+		c:   c,
 	}
 }
 
-// TestQuerySpanCarriesOtelDatabaseAttributes pins the attribute contract:
+// andTheCallerSuppliedTheSQL puts the statement in place before the query runs,
+// the way db.Raw(...).Find(...) does.
+func (s *scenario) andTheCallerSuppliedTheSQL(sql string) *scenario {
+	s.db.Statement.SQL.WriteString(sql)
+	return s
+}
+
+// whenTheQueryRuns drives the before and after hooks around the point where gorm
+// itself builds the SQL, so the test sees the same ordering production does.
+func (s *scenario) whenTheQueryRuns(operation, sqlBuiltByGorm string) *scenario {
+	s.t.Helper()
+
+	s.c.before(s.db, operation)
+	if sqlBuiltByGorm != "" {
+		// gorm builds Statement.SQL inside its own "gorm:<operation>" callback,
+		// which runs between the two hooks.
+		s.db.Statement.SQL.Reset()
+		s.db.Statement.SQL.WriteString(sqlBuiltByGorm)
+	}
+	s.c.after(s.db)
+
+	return s
+}
+
+// thenTheDatabaseSpan returns the single span the query should have produced,
+// failing the test if none arrived.
 //
-//	Given an instrumented gorm query with statement recording enabled,
+// Selected by presence rather than by count: ocgormv2 registers its row-query
+// callbacks against an anchor that does not exist on gorm v2's Query processor,
+// so a real query currently records more than one span. That is a separate
+// pre-existing defect, and asserting a count here would fail because of it.
+func (s *scenario) thenTheDatabaseSpan() *trace.SpanData {
+	s.t.Helper()
+
+	spans := s.rec.gormSpans()
+	require.NotEmpty(s.t, spans, "the instrumentation produced no span for the query")
+
+	return spans[0]
+}
+
+// TestADatabaseQueryIsReportedAsAnOutboundCall is the regression test for the
+// outage:
+//
+//	Given a gorm query running inside a request span,
 //	When  it completes,
-//	Then  the span carries the OpenTelemetry database attributes, and still
-//	      carries the pre-existing Datadog ones.
+//	Then  its span is marked as a client (outbound) call.
 //
-// The db.* keys are the pre-1.26 semantic-convention spellings on purpose; see
-// the constants in pkg/ocgorm/trace.go.
-func TestQuerySpanCarriesOtelDatabaseAttributes(t *testing.T) {
-	const sql = "SELECT * FROM users WHERE id = $1"
-	spans := record(t, &callbacks{query: true}, "query", sql)
+// Before this was fixed the kind was only set when no parent span existed, which
+// never happens in a served request -- and never happens at all once the
+// OpenCensus->OpenTelemetry bridge is installed, because the bridge's FromContext
+// returns a no-op span rather than nil.
+func TestADatabaseQueryIsReportedAsAnOutboundCall(t *testing.T) {
+	span := givenAnInstrumentedQuery(t, Query(true)).
+		whenTheQueryRuns("query", "SELECT * FROM users WHERE id = $1").
+		thenTheDatabaseSpan()
 
-	if len(spans) == 0 {
-		t.Fatal("no span was exported for the gorm operation")
-	}
-	got := attrs(spans[0])
-
-	for key, want := range map[string]interface{}{
-		ocgorm.DBStatementAttribute: sql,
-		ocgorm.DBOperationAttribute: "SELECT",
-		ocgorm.DBSQLTableAttribute:  "users",
-		// Datadog attributes must survive: services still fan out to Datadog
-		// during the Instana migration.
-		ocgorm.ResourceNameAttribute: sql,
-		ocgorm.TableAttribute:        "users",
-	} {
-		if got[key] != want {
-			t.Errorf("attribute %s = %v, want %v", key, got[key], want)
-		}
-	}
+	assert.Equal(t, trace.SpanKindClient, span.SpanKind,
+		"a query without client kind reaches the backend as INTERNAL, and Instana "+
+			"then reports it as ordinary internal work rather than a database call")
 }
 
-// TestCallerSuppliedStatementIsRecorded covers the case where the caller built
-// the SQL itself, as db.Raw(...).Find(...) does.
+// TestADatabaseQueryDescribesTheDatabaseItQueried:
 //
-//	Given a query whose SQL is already set before the callbacks run,
+//	Given a gorm query with statement recording enabled,
 //	When  it completes,
-//	Then  the statement is recorded.
+//	Then  its span carries the OpenTelemetry database attributes,
+//	And   it still carries the Datadog attributes services depend on today.
 //
-// This is why the statement is recorded in startTrace as well as endTrace. gorm
-// normally builds Statement.SQL in its own "gorm:<operation>" callback, after the
-// before-hook, but Raw populates it up front -- so the two hooks cover different
-// shapes of query and both are needed.
-func TestCallerSuppliedStatementIsRecorded(t *testing.T) {
+// The db.* keys are the pre-1.26 semantic-convention spellings deliberately; see
+// the constants in pkg/ocgorm/trace.go for why renaming them breaks detection.
+func TestADatabaseQueryDescribesTheDatabaseItQueried(t *testing.T) {
 	const sql = "SELECT * FROM users WHERE id = $1"
 
-	rec := &recorder{}
-	trace.RegisterExporter(rec)
-	t.Cleanup(func() { trace.UnregisterExporter(rec) })
+	span := givenAnInstrumentedQuery(t, Query(true)).
+		whenTheQueryRuns("query", sql).
+		thenTheDatabaseSpan()
 
-	ctx, parent := trace.StartSpan(context.Background(), "parent",
-		trace.WithSampler(trace.AlwaysSample()))
+	t.Run("OpenTelemetry attributes", func(t *testing.T) {
+		assert.Equal(t, sql, span.Attributes[ocgorm.DBStatementAttribute])
+		assert.Equal(t, "SELECT", span.Attributes[ocgorm.DBOperationAttribute],
+			"db.operation should be the SQL verb, which is what backends show as the command type")
+		assert.Equal(t, "users", span.Attributes[ocgorm.DBSQLTableAttribute])
+	})
 
-	// Given: SQL present before the before-hook, the way Raw leaves it.
-	db := &gorm.DB{Statement: &gorm.Statement{Table: "users", Context: ctx}}
-	db.Statement.SQL.WriteString(sql)
-
-	c := &callbacks{query: true}
-	c.before(db, "query")
-	c.after(db)
-	parent.End()
-
-	for _, s := range rec.spans {
-		if s.Name == "parent" {
-			continue
-		}
-		if got := s.Attributes[ocgorm.DBStatementAttribute]; got != sql {
-			t.Errorf("%s = %v, want %v", ocgorm.DBStatementAttribute, got, sql)
-		}
-		if got := s.Attributes[ocgorm.ResourceNameAttribute]; got != sql {
-			t.Errorf("%s = %v, want %v", ocgorm.ResourceNameAttribute, got, sql)
-		}
-	}
+	t.Run("Datadog attributes still present", func(t *testing.T) {
+		assert.Equal(t, sql, span.Attributes[ocgorm.ResourceNameAttribute],
+			"services still fan out to Datadog during the migration")
+		assert.Equal(t, "users", span.Attributes[ocgorm.TableAttribute])
+	})
 }
 
-// TestStatementOmittedWhenQueryDisabled checks the Query(false) contract still
-// holds for the new attribute: callers who opt out of statement recording must
-// not have the SQL emitted under a different key.
-func TestStatementOmittedWhenQueryDisabled(t *testing.T) {
-	spans := record(t, &callbacks{query: false}, "query", "SELECT * FROM users WHERE id = $1")
+// TestAStatementSuppliedByTheCallerIsStillRecorded covers the query shape that
+// makes the before-hook recording necessary:
+//
+//	Given a query whose SQL the caller built, as db.Raw(...).Find(...) does,
+//	When  it completes,
+//	Then  the statement is still recorded.
+//
+// gorm normally builds Statement.SQL after the before-hook, so for Find, Create,
+// Update and Delete only the after-hook sees it. Raw populates it up front. The
+// statement is recorded in both hooks so either shape is covered.
+func TestAStatementSuppliedByTheCallerIsStillRecorded(t *testing.T) {
+	const sql = "SELECT * FROM users WHERE id = $1"
 
-	if len(spans) == 0 {
-		t.Fatal("no span was exported for the gorm operation")
-	}
-	for _, s := range spans {
-		if _, ok := attrs(s)[ocgorm.DBStatementAttribute]; ok {
-			t.Errorf("span %q recorded %s despite Query(false)", s.Name, ocgorm.DBStatementAttribute)
-		}
-		if _, ok := attrs(s)[ocgorm.ResourceNameAttribute]; ok {
-			t.Errorf("span %q recorded %s despite Query(false)", s.Name, ocgorm.ResourceNameAttribute)
-		}
-	}
+	span := givenAnInstrumentedQuery(t, Query(true)).
+		andTheCallerSuppliedTheSQL(sql).
+		whenTheQueryRuns("query", "").
+		thenTheDatabaseSpan()
+
+	assert.Equal(t, sql, span.Attributes[ocgorm.DBStatementAttribute])
+	assert.Equal(t, sql, span.Attributes[ocgorm.ResourceNameAttribute])
 }
 
-// TestOperationVerbs covers the gorm-operation to SQL-verb mapping that becomes
-// db.operation, including the unmapped case.
-func TestOperationVerbs(t *testing.T) {
-	for operation, want := range map[string]string{
+// TestOptingOutOfStatementRecordingIsHonoured:
+//
+//	Given a caller that disabled statement recording with Query(false),
+//	When  a query completes,
+//	Then  the SQL appears under no attribute at all.
+//
+// Worth pinning explicitly, because adding db.statement alongside resource.name
+// would otherwise be an easy way to leak the SQL of callers who opted out.
+func TestOptingOutOfStatementRecordingIsHonoured(t *testing.T) {
+	span := givenAnInstrumentedQuery(t, Query(false)).
+		whenTheQueryRuns("query", "SELECT * FROM users WHERE id = $1").
+		thenTheDatabaseSpan()
+
+	assert.NotContains(t, span.Attributes, ocgorm.DBStatementAttribute)
+	assert.NotContains(t, span.Attributes, ocgorm.ResourceNameAttribute)
+}
+
+// TestEveryGormOperationReportsItsSQLVerb walks the operations gorm can hand the
+// instrumentation:
+//
+//	Given each of gorm's callback operations,
+//	When  a query of that kind completes,
+//	Then  db.operation is the corresponding SQL verb.
+func TestEveryGormOperationReportsItsSQLVerb(t *testing.T) {
+	for operation, wantVerb := range map[string]string{
 		"create":    "INSERT",
 		"query":     "SELECT",
 		"row_query": "SELECT",
 		"update":    "UPDATE",
 		"delete":    "DELETE",
-		"nonsense":  "",
 	} {
-		if got := ocgorm.SQLVerbForOperation(operation); got != want {
-			t.Errorf("SQLVerbForOperation(%q) = %q, want %q", operation, got, want)
-		}
+		t.Run(operation, func(t *testing.T) {
+			span := givenAnInstrumentedQuery(t, Query(true)).
+				whenTheQueryRuns(operation, "SELECT 1").
+				thenTheDatabaseSpan()
+
+			assert.Equal(t, wantVerb, span.Attributes[ocgorm.DBOperationAttribute])
+		})
 	}
 }
