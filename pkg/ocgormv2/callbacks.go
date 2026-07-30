@@ -89,8 +89,15 @@ func RegisterCallbacks(db *gorm.DB, opts ...Option) error {
 		db.Callback().Create().After("gorm:create").Register("instrumentation:after_create", c.afterCreate),
 		db.Callback().Query().Before("gorm:query").Register("instrumentation:before_query", c.beforeQuery),
 		db.Callback().Query().After("gorm:query").Register("instrumentation:after_query", c.afterQuery),
-		db.Callback().Query().Before("gorm:row_query").Register("instrumentation:before_row_query", c.beforeRowQuery),
-		db.Callback().Query().After("gorm:row_query").Register("instrumentation:after_row_query", c.afterRowQuery),
+		// Row queries live on gorm v2's Row processor, whose built-in callback is
+		// named "gorm:row" -- the Query processor has only gorm:query,
+		// gorm:preload and gorm:after_query. Anchoring these to "gorm:row_query"
+		// on Query matched nothing, and gorm appends callbacks whose anchor it
+		// cannot find rather than rejecting them, so they silently ran on every
+		// Query (recording a second, duplicate span) and never ran for the
+		// Row()/Rows()/Scan() calls they were meant to instrument.
+		db.Callback().Row().Before("gorm:row").Register("instrumentation:before_row_query", c.beforeRowQuery),
+		db.Callback().Row().After("gorm:row").Register("instrumentation:after_row_query", c.afterRowQuery),
 		db.Callback().Update().Before("gorm:update").Register("instrumentation:before_update", c.beforeUpdate),
 		db.Callback().Update().After("gorm:update").Register("instrumentation:after_update", c.afterUpdate),
 		db.Callback().Delete().Before("gorm:delete").Register("instrumentation:before_delete", c.beforeDelete),
