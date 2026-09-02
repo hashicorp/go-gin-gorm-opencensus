@@ -1,6 +1,6 @@
 module github.com/hashicorp/go-gin-gorm-opencensus
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/jinzhu/gorm v1.9.16
