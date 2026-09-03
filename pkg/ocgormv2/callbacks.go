@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.opencensus.io/stats"
@@ -159,8 +160,8 @@ func (c *callbacks) startTrace(ctx context.Context, db *gorm.DB, operation strin
 		)
 	}
 
-	attributes := append(
-		c.defaultAttributes,
+	attributes := slices.Clone(c.defaultAttributes)
+	attributes = append(attributes,
 		trace.StringAttribute(ocgorm.TableAttribute, db.Statement.Table),
 		trace.StringAttribute(ocgorm.DBSQLTableAttribute, db.Statement.Table),
 	)

@@ -5,13 +5,13 @@ package ocgormv2
 
 import (
 	"context"
-	"go.opencensus.io/tag"
 	"strings"
 	"sync"
 	"time"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
+	"go.opencensus.io/tag"
 	"gorm.io/gorm"
 
 	"github.com/hashicorp/go-gin-gorm-opencensus/pkg/ocgorm"
@@ -56,7 +56,7 @@ func RecordStats(db *gorm.DB, interval time.Duration, name string) (fnStop func(
 					}
 				}
 
-				stats.RecordWithTags(ctx,
+				_ = stats.RecordWithTags(ctx,
 					[]tag.Mutator{tag.Upsert(ocgorm.DatabaseName, name)},
 					ocgorm.MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
 					ocgorm.MeasureIdleConnections.M(int64(dbStats.Idle)),

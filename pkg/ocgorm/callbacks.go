@@ -3,6 +3,7 @@ package ocgorm
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jinzhu/gorm"
@@ -149,8 +150,8 @@ func (c *callbacks) startTrace(ctx context.Context, scope *gorm.Scope, operation
 		)
 	}
 
-	attributes := append(
-		c.defaultAttributes,
+	attributes := slices.Clone(c.defaultAttributes)
+	attributes = append(attributes,
 		trace.StringAttribute(TableAttribute, scope.TableName()),
 		trace.StringAttribute(DBSQLTableAttribute, scope.TableName()),
 	)

@@ -188,7 +188,7 @@ func RecordStats(db *gorm.DB, interval time.Duration, name string) (fnStop func(
 					}
 				}
 
-				stats.RecordWithTags(ctx,
+				_ = stats.RecordWithTags(ctx,
 					[]tag.Mutator{tag.Upsert(DatabaseName, name)},
 					MeasureOpenConnections.M(int64(dbStats.OpenConnections)),
 					MeasureIdleConnections.M(int64(dbStats.Idle)),

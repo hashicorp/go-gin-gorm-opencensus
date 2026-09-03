@@ -9,7 +9,7 @@ BUILD_DIR = build
 BUILD_PACKAGE = ${PACKAGE}
 
 # Dependency versions
-GOLANGCI_VERSION = 1.16.0
+GOLANGCI_VERSION = 2.13.2
 
 .PHONY: up
 up: start .env .env.test ## Set up the development environment
@@ -63,12 +63,12 @@ bin/golangci-lint: bin/golangci-lint-${GOLANGCI_VERSION}
 bin/golangci-lint-${GOLANGCI_VERSION}:
 	@mkdir -p bin
 	@rm -rf bin/golangci-lint-*
-	curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | bash -s -- -b ./bin/ v${GOLANGCI_VERSION}
+	curl -sSfL https://golangci-lint.run/install.sh | sh -s v${GOLANGCI_VERSION}
 	@touch $@
 
 .PHONY: lint
 lint: bin/golangci-lint ## Run linter
-	bin/golangci-lint run
+	bin/golangci-lint run --config golangci-lint.yml
 
 .PHONY: help
 .DEFAULT_GOAL := help
